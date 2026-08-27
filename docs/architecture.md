@@ -21,8 +21,10 @@ flowchart LR
 `ScenarioLoader` maps YAML into records and rejects unknown fields, null or
 incomplete sections, unsupported methods, invalid HTTP URLs, non-positive
 duplicate counts, an empty status set, and a missing `${probe.key}` header
-token. The token is deliberately not a general template language: one UUID is
-generated per run and substituted into target header values only.
+token. Each execution phase is capped at 100 duplicates, and their combined
+total is capped at 100. The token is deliberately not a general template
+language: one UUID is generated per run and replaces one or more token
+occurrences in target header values only.
 
 ## Execution boundary
 
@@ -36,6 +38,12 @@ All duplicates use the same generated key. Completed concurrent results are
 sorted by invocation index before they leave the runner, then the required GET
 verification request runs.
 
+The JDK client uses a 3-second connection timeout and applies a 5-second
+timeout to every request. A streaming subscriber cancels an exchange as soon
+as its response exceeds 1 MiB, so the client never buffers an unbounded body.
+Timeouts, oversize bodies, and other I/O failures become structured transport
+evidence; an interrupted caller has its interrupt status restored.
+
 ## Evidence boundary
 
 The HTTP adapter returns either `HttpInvocationResult` or `TransportFailure`.
@@ -47,7 +55,8 @@ Reporting narrows that evidence further. JSON schema version `1` includes only
 index, phase, outcome, HTTP status when available, verification evidence, and
 structured findings. It excludes request URLs, headers, bodies, response
 bodies, generated keys, timestamps, and timings. Property ordering is stable,
-and invocation evidence is sorted by phase and index.
+invocation evidence is sorted by phase and index, and identity-divergence
+findings expose a count rather than extracted identity values.
 
 ## Evaluation boundary
 
@@ -66,9 +75,10 @@ also exit `2`.
 ## Reporting boundary
 
 The console reporter is the default. `--json PATH` selects the JSON reporter
-and writes to that exact path instead of standard output. Reporter failures are
-runtime failures and exit `2`; reporter selection does not alter a successfully
-written `RunResult` exit code.
+and writes to a sibling temporary file before atomically replacing that exact
+path. A serialization or write failure leaves the previous artifact intact.
+Reporter failures are runtime failures and exit `2`; reporter selection does
+not alter a successfully written `RunResult` exit code.
 
 ## Demo transaction
 

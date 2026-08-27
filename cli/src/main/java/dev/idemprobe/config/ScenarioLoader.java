@@ -10,6 +10,8 @@ import java.util.Objects;
 
 public final class ScenarioLoader {
     private static final String PROBE_KEY_TOKEN = "${probe.key}";
+    private static final int MAX_DUPLICATES_PER_PHASE = 100;
+    private static final int MAX_TOTAL_DUPLICATES = 100;
 
     private final ObjectMapper mapper = YAMLMapper.builder()
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -47,8 +49,21 @@ public final class ScenarioLoader {
         if (execution.sequentialDuplicates() <= 0) {
             throw new IllegalArgumentException("execution.sequentialDuplicates must be positive");
         }
+        if (execution.sequentialDuplicates() > MAX_DUPLICATES_PER_PHASE) {
+            throw new IllegalArgumentException(
+                    "execution.sequentialDuplicates must not exceed " + MAX_DUPLICATES_PER_PHASE);
+        }
         if (execution.concurrentDuplicates() <= 0) {
             throw new IllegalArgumentException("execution.concurrentDuplicates must be positive");
+        }
+        if (execution.concurrentDuplicates() > MAX_DUPLICATES_PER_PHASE) {
+            throw new IllegalArgumentException(
+                    "execution.concurrentDuplicates must not exceed " + MAX_DUPLICATES_PER_PHASE);
+        }
+        if (execution.sequentialDuplicates() + execution.concurrentDuplicates()
+                > MAX_TOTAL_DUPLICATES) {
+            throw new IllegalArgumentException(
+                    "execution duplicate total must not exceed " + MAX_TOTAL_DUPLICATES);
         }
     }
 

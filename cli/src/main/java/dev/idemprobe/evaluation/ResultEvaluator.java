@@ -61,7 +61,7 @@ public final class ResultEvaluator {
         if (identities.size() > 1) {
             findings.add(new Finding(
                     FindingCode.IDENTITY_DIVERGED,
-                    "Duplicate responses returned different identities: " + identities));
+                    "Duplicate responses returned " + identities.size() + " distinct identities"));
         }
 
         evaluateVerification(scenario, execution.verificationResult(), findings);

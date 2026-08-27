@@ -4,12 +4,18 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sun.net.httpserver.HttpServer;
+import dev.idemprobe.engine.InvocationPhase;
+import dev.idemprobe.engine.ProbeExecution;
+import dev.idemprobe.engine.TransportFailure;
+import dev.idemprobe.evaluation.RunResult;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +51,24 @@ class IdemProbeCommandTest {
     }
 
     @Test
+    void reportsTheReleaseVersion() {
+        CapturedExecution execution = execute("--version");
+
+        assertThat(execution.exitCode()).isZero();
+        assertThat(execution.out()).isEqualTo("0.1.0" + System.lineSeparator());
+        assertThat(execution.err()).isEmpty();
+    }
+
+    @Test
+    void runHelpExitsWithoutRequiringAScenario() {
+        CapturedExecution execution = execute("run", "--help");
+
+        assertThat(execution.exitCode()).isZero();
+        assertThat(execution.out()).contains("Usage: idemprobe run");
+        assertThat(execution.err()).isEmpty();
+    }
+
+    @Test
     void returnsZeroAndReportsPassForStableSequentialDuplicates() throws IOException {
         server.createContext("/reservations", exchange ->
                 respond(exchange, 201, "{\"reservationId\":\"r-1\"}"));
@@ -63,10 +87,12 @@ class IdemProbeCommandTest {
 
     @Test
     void returnsOneAndReportsAllSemanticViolations() throws IOException {
+        String sentinel = "secret-divergent-identity";
         AtomicInteger reservations = new AtomicInteger();
         server.createContext("/reservations", exchange -> {
             int reservation = reservations.incrementAndGet();
-            respond(exchange, 201, "{\"reservationId\":\"r-" + reservation + "\"}");
+            respond(exchange, 201,
+                    "{\"reservationId\":\"" + sentinel + "-" + reservation + "\"}");
         });
         server.createContext("/reservations/count", exchange ->
                 respond(exchange, 200, "{\"count\":" + reservations.get() + "}"));
@@ -77,16 +103,19 @@ class IdemProbeCommandTest {
         assertThat(execution.out())
                 .contains("FAIL")
                 .contains("IDENTITY_DIVERGED")
-                .contains("SIDE_EFFECT_COUNT_MISMATCH");
+                .contains("SIDE_EFFECT_COUNT_MISMATCH")
+                .doesNotContain(sentinel);
         assertThat(execution.err()).isEmpty();
     }
 
     @Test
     void writesJsonToTheRequestedPathAndPreservesTheSemanticExitCode() throws IOException {
+        String sentinel = "secret-json-identity";
         AtomicInteger reservations = new AtomicInteger();
         server.createContext("/reservations", exchange -> {
             int reservation = reservations.incrementAndGet();
-            respond(exchange, 201, "{\"reservationId\":\"r-" + reservation + "\"}");
+            respond(exchange, 201,
+                    "{\"reservationId\":\"" + sentinel + "-" + reservation + "\"}");
         });
         server.createContext("/reservations/count", exchange ->
                 respond(exchange, 200, "{\"count\":" + reservations.get() + "}"));
@@ -105,7 +134,38 @@ class IdemProbeCommandTest {
                 .contains("\"exitCode\" : 1")
                 .contains("\"code\" : \"IDENTITY_DIVERGED\"")
                 .doesNotContain("Idempotency-Key")
-                .doesNotContain("PHONE");
+                .doesNotContain("PHONE")
+                .doesNotContain(sentinel);
+    }
+
+    @Test
+    void preservesThePreviousJsonArtifactWhenWritingFails() throws IOException {
+        Path report = tempDir.resolve("report.json");
+        Files.writeString(report, "previous-report");
+        RunResult result = new RunResult(
+                new ProbeExecution(
+                        List.of(),
+                        new TransportFailure(
+                                0,
+                                InvocationPhase.VERIFICATION,
+                                "safe failure",
+                                Duration.ZERO)),
+                List.of());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> RunCommand.writeToPath(
+                        (ignored, output) -> {
+                            output.write("partial-report".getBytes(UTF_8));
+                            throw new IOException("write failed");
+                        },
+                        result,
+                        report))
+                .isInstanceOf(IOException.class);
+
+        assertThat(Files.readString(report)).isEqualTo("previous-report");
+        try (var files = Files.list(tempDir)) {
+            assertThat(files.map(path -> path.getFileName().toString()))
+                    .noneMatch(name -> name.endsWith(".tmp"));
+        }
     }
 
     @Test
@@ -162,6 +222,23 @@ class IdemProbeCommandTest {
         assertThat(execution.exitCode()).isEqualTo(2);
         assertThat(execution.out()).isEmpty();
         assertThat(execution.err()).contains("ERROR").contains("expectedValue");
+    }
+
+    @Test
+    void doesNotEchoAnInvalidHeaderValueToStderr() throws IOException {
+        String sentinel = "secret-header-value";
+        Path scenario = writeScenario(baseUrl(), baseUrl(), "$.reservationId");
+        Files.writeString(
+                scenario,
+                Files.readString(scenario).replace(
+                        "    Content-Type: application/json",
+                        "    X-Secret: |\n      " + sentinel + "\n      second-line"));
+
+        CapturedExecution execution = execute("run", scenario);
+
+        assertThat(execution.exitCode()).isEqualTo(2);
+        assertThat(execution.out()).doesNotContain(sentinel);
+        assertThat(execution.err()).contains("ERROR").doesNotContain(sentinel);
     }
 
     private CapturedExecution execute(Object... args) {

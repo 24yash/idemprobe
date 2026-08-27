@@ -69,10 +69,11 @@ java -jar cli/target/idemprobe.jar run \
   --json build/idemprobe-report.json examples/reservation.yaml
 ```
 
-The parent directory must already exist. IdemProbe creates or replaces the
-file at the exact path passed to `--json`. To observe the passing mode, use a
-fresh database, restart the demo with `IDEMPROBE_DEMO_MODE=fixed`, and run the
-unchanged scenario again.
+The parent directory must already exist. IdemProbe writes a sibling temporary
+file and atomically replaces the file at the exact path passed to `--json`, so
+a failed write preserves any previous report. To observe the passing mode, use
+a fresh database, restart the demo with `IDEMPROBE_DEMO_MODE=fixed`, and run
+the unchanged scenario again.
 
 ## Scenario format
 
@@ -100,10 +101,11 @@ verification:
   expectedValue: 1
 ```
 
-`target` must be a POST request. Exactly one supported token,
-`${probe.key}`, must appear in a target header; one generated UUID replaces it
-for every duplicate in a run. `execution` requires positive sequential and
-concurrent counts. `assertions` defines accepted response statuses and the
+`target` must be a POST request. One or more occurrences of the only supported
+token, `${probe.key}`, must appear in target headers; one generated UUID
+replaces every occurrence for every duplicate in a run. `execution` requires
+positive sequential and concurrent counts, caps each phase at 100, and caps
+their sum at 100. `assertions` defines accepted response statuses and the
 JSONPath used to compare identities. `verification` is a required GET whose
 numeric JSONPath value is compared with `expectedValue`. Unknown YAML fields
 are rejected.
@@ -124,7 +126,9 @@ JSON reports use schema version `1`, stable property and invocation ordering,
 and no timestamps or elapsed timings. They include the exit code, verdict,
 phase/outcome/status evidence, verification evidence, and findings. They do not
 serialize target URLs, arbitrary request headers, request or response bodies,
-or the generated idempotency key. A small report looks like this:
+or the generated idempotency key. Identity-divergence findings report only the
+number of distinct identities, not their extracted values. A small report
+looks like this:
 
 ```json
 {
@@ -199,6 +203,11 @@ measures the side effect you care about. Scenario files can contain sensitive
 headers or payloads; protect them like other local configuration. JSON output
 omits those request details, but finding messages can contain values extracted
 by evaluation.
+
+Each connection attempt is bounded to 3 seconds, each request to 5 seconds,
+and each response body to 1 MiB. Timeouts and oversized responses become
+`TRANSPORT_ERROR` findings and exit `2`. These fixed v0.1 safety limits are not
+user-configurable.
 
 v0.1 does not include network-fault injection, configurable retries, generic
 same-key/different-payload attacks, authentication helpers, setup or teardown

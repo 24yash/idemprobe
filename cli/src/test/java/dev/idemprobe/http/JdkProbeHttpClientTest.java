@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 class JdkProbeHttpClientTest {
 
@@ -136,6 +137,49 @@ class JdkProbeHttpClientTest {
 
         assertThat(result).isInstanceOfSatisfying(TransportFailure.class, failure ->
                 assertThat(failure.message()).isNotBlank());
+    }
+
+    @Test
+    @Timeout(value = 7)
+    void returnsStructuredTransportFailureWhenTheServerStalls() throws InterruptedException {
+        CountDownLatch requestReceived = new CountDownLatch(1);
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        server.createContext("/stalled", exchange -> {
+            requestReceived.countDown();
+            try {
+                releaseResponse.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } finally {
+                exchange.close();
+            }
+        });
+
+        try {
+            InvocationResult result = client.execute(invocation(serverUri("/stalled")));
+
+            assertThat(requestReceived.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(result).isInstanceOfSatisfying(TransportFailure.class, failure ->
+                    assertThat(failure.message()).isEqualTo("request timed out after 5 seconds"));
+        } finally {
+            releaseResponse.countDown();
+        }
+    }
+
+    @Test
+    void rejectsAnOversizedResponseWithoutReturningItsContent() {
+        byte[] body = new byte[1_048_577];
+        server.createContext("/oversized", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+
+        InvocationResult result = client.execute(invocation(serverUri("/oversized")));
+
+        assertThat(result).isInstanceOfSatisfying(TransportFailure.class, failure ->
+                assertThat(failure.message())
+                        .isEqualTo("response body exceeded 1048576-byte limit"));
     }
 
     private URI serverUri(String path) {

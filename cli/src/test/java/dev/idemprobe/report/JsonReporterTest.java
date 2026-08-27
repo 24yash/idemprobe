@@ -42,7 +42,7 @@ class JsonReporterTest {
                                 Duration.ofMillis(3))),
                 List.of(new Finding(
                         FindingCode.IDENTITY_DIVERGED,
-                        "Duplicate responses returned different identities")));
+                        "Duplicate responses returned 2 distinct identities")));
         ByteArrayOutputStream first = new ByteArrayOutputStream();
         ByteArrayOutputStream second = new ByteArrayOutputStream();
 
@@ -55,7 +55,7 @@ class JsonReporterTest {
                   "exitCode" : 1,
                   "findings" : [ {
                     "code" : "IDENTITY_DIVERGED",
-                    "message" : "Duplicate responses returned different identities"
+                    "message" : "Duplicate responses returned 2 distinct identities"
                   } ],
                   "invocations" : [ {
                     "index" : 0,

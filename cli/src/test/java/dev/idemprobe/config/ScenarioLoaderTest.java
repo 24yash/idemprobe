@@ -71,6 +71,37 @@ class ScenarioLoaderTest {
     }
 
     @Test
+    void rejectsSequentialDuplicateCountsAboveThePerPhaseLimit() {
+        String invalid = VALID_SCENARIO.replace(
+                "sequentialDuplicates: 2", "sequentialDuplicates: 101");
+
+        assertThatThrownBy(() -> load(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("execution.sequentialDuplicates must not exceed 100");
+    }
+
+    @Test
+    void rejectsConcurrentDuplicateCountsAboveThePerPhaseLimit() {
+        String invalid = VALID_SCENARIO.replace(
+                "concurrentDuplicates: 20", "concurrentDuplicates: 101");
+
+        assertThatThrownBy(() -> load(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("execution.concurrentDuplicates must not exceed 100");
+    }
+
+    @Test
+    void rejectsCombinedDuplicateCountsAboveTheTotalLimit() {
+        String invalid = VALID_SCENARIO
+                .replace("sequentialDuplicates: 2", "sequentialDuplicates: 81")
+                .replace("concurrentDuplicates: 20", "concurrentDuplicates: 20");
+
+        assertThatThrownBy(() -> load(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("execution duplicate total must not exceed 100");
+    }
+
+    @Test
     void rejectsUnknownConfiguration() {
         String invalid = VALID_SCENARIO.replace(
                 "  body:", "  surpriseMode: true\n  body:");

@@ -56,17 +56,23 @@ class ResultEvaluatorTest {
 
     @Test
     void findsIdentityDivergenceAndMultipleSideEffects() {
+        String firstSecret = "secret-identity-one";
+        String secondSecret = "secret-identity-two";
         RunResult result = evaluator.evaluate(
                 scenario,
                 new ProbeExecution(
-                        List.of(http(0, 201, "{\"reservationId\":\"r-1\"}"),
-                                http(1, 201, "{\"reservationId\":\"r-2\"}")),
+                        List.of(http(0, 201, "{\"reservationId\":\"" + firstSecret + "\"}"),
+                                http(1, 201, "{\"reservationId\":\"" + secondSecret + "\"}")),
                         httpVerification(200, "{\"count\":2}")));
 
         assertThat(result.findings()).extracting(Finding::code)
                 .containsExactlyInAnyOrder(
                         FindingCode.IDENTITY_DIVERGED,
                         FindingCode.SIDE_EFFECT_COUNT_MISMATCH);
+        assertThat(result.findings()).extracting(Finding::message)
+                .noneMatch(message -> message.contains(firstSecret) || message.contains(secondSecret));
+        assertThat(result.findings()).extracting(Finding::message)
+                .anyMatch(message -> message.contains("2 distinct identities"));
         assertThat(result.exitCode()).isEqualTo(1);
     }
 
