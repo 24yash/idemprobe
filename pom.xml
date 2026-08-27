@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>dev.idemprobe</groupId>
+    <artifactId>idemprobe-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <modules>
+        <module>cli</module>
+        <module>demo</module>
+    </modules>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <picocli.version>4.7.7</picocli.version>
+        <jackson.version>2.22.2</jackson.version>
+        <json-path.version>2.10.0</json-path.version>
+        <spring-boot.version>3.5.16</spring-boot.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
+        <junit.version>5.14.4</junit.version>
+        <assertj.version>3.27.7</assertj.version>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.6.2</version>
+                <executions>
+                    <execution>
+                        <id>enforce-java-version</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[21,22)</version>
+                                </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.4</version>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.1</version>
+                <configuration>
+                    <skipIfEmpty>true</skipIfEmpty>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.5.4</version>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
