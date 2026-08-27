@@ -33,6 +33,9 @@ public final class ScenarioLoader {
 
     private void validateTarget(TargetSpec target) {
         requireNonBlank(target.method(), "target.method");
+        if (!target.method().equals("POST")) {
+            throw new IllegalArgumentException("target.method must be POST");
+        }
         requireHttpUrl(target.url(), "target.url");
         requireNonNull(target.headers(), "target.headers");
         if (target.headers().values().stream().noneMatch(value -> value.contains(PROBE_KEY_TOKEN))) {
@@ -59,6 +62,9 @@ public final class ScenarioLoader {
 
     private void validateVerification(VerificationSpec verification) {
         requireNonBlank(verification.method(), "verification.method");
+        if (!verification.method().equals("GET")) {
+            throw new IllegalArgumentException("verification.method must be GET");
+        }
         requireHttpUrl(verification.url(), "verification.url");
         requireNonBlank(verification.valueAt(), "verification.valueAt");
         requireNonNull(verification.expectedValue(), "verification.expectedValue");

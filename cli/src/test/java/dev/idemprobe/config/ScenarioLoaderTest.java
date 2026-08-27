@@ -108,6 +108,24 @@ class ScenarioLoaderTest {
     }
 
     @Test
+    void rejectsTargetMethodOtherThanUppercasePost() {
+        String invalid = VALID_SCENARIO.replace("method: POST", "method: post");
+
+        assertThatThrownBy(() -> load(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("target.method");
+    }
+
+    @Test
+    void rejectsVerificationMethodOtherThanUppercaseGet() {
+        String invalid = VALID_SCENARIO.replace("method: GET", "method: get");
+
+        assertThatThrownBy(() -> load(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("verification.method");
+    }
+
+    @Test
     void rejectsNonHttpTargetUrl() {
         String invalid = VALID_SCENARIO.replace(
                 "http://localhost:8080/reservations", "ftp://localhost:8080/reservations");
@@ -147,11 +165,30 @@ class ScenarioLoaderTest {
     }
 
     @Test
+    void rejectsNullHeaderValueWithAFieldSpecificConfigurationError() {
+        String invalid = VALID_SCENARIO.replace(
+                "Content-Type: application/json", "Content-Type: null");
+
+        assertThatThrownBy(() -> load(invalid))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("target.headers");
+    }
+
+    @Test
     void rejectsEmptyAllowedStatuses() {
         String invalid = VALID_SCENARIO.replace("[200, 201]", "[]");
 
         assertThatThrownBy(() -> load(invalid))
                 .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("assertions.allowedStatuses");
+    }
+
+    @Test
+    void rejectsNullAllowedStatusWithAFieldSpecificConfigurationError() {
+        String invalid = VALID_SCENARIO.replace("[200, 201]", "[200, null]");
+
+        assertThatThrownBy(() -> load(invalid))
+                .isInstanceOf(IOException.class)
                 .hasMessageContaining("assertions.allowedStatuses");
     }
 
