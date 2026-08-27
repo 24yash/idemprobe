@@ -5,6 +5,7 @@ import java.util.Map;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -34,5 +35,10 @@ public class ReservationController {
     @GetMapping("/count")
     public Map<String, Integer> count() {
         return Map.of("count", service.reservationCount());
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    void handleIdempotencyConflict() {
     }
 }

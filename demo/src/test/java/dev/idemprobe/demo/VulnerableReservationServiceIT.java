@@ -4,7 +4,6 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -13,22 +12,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -37,7 +29,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.web.filter.OncePerRequestFilter;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
@@ -46,7 +37,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
         webEnvironment = WebEnvironment.RANDOM_PORT,
         properties = "idemprobe.demo.mode=vulnerable")
-@Import(VulnerableReservationServiceIT.ConcurrentPostBarrierConfiguration.class)
+@Import(ConcurrentPostBarrierConfiguration.class)
 @Testcontainers
 class VulnerableReservationServiceIT {
 
@@ -224,101 +215,4 @@ class VulnerableReservationServiceIT {
         }
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class ConcurrentPostBarrierConfiguration {
-
-        @Bean
-        ConcurrentPostBarrier concurrentPostBarrier() {
-            return new ConcurrentPostBarrier();
-        }
-
-        @Bean
-        OncePerRequestFilter concurrentPostBarrierFilter(ConcurrentPostBarrier barrier) {
-            return new OncePerRequestFilter() {
-                @Override
-                protected void doFilterInternal(
-                        HttpServletRequest request,
-                        HttpServletResponse response,
-                        FilterChain filterChain) throws ServletException, IOException {
-                    if ("POST".equals(request.getMethod())
-                            && "/reservations".equals(request.getRequestURI())) {
-                        try {
-                            if (!barrier.enterAndAwaitRelease(10, SECONDS)) {
-                                throw new ServletException("server barrier timed out");
-                            }
-                        } catch (InterruptedException interrupted) {
-                            Thread.currentThread().interrupt();
-                            throw new ServletException("server barrier interrupted", interrupted);
-                        }
-                    }
-                    filterChain.doFilter(request, response);
-                }
-            };
-        }
-    }
-
-    static final class ConcurrentPostBarrier {
-
-        private final AtomicReference<State> active = new AtomicReference<>();
-
-        void arm(int expectedRequests) {
-            if (!active.compareAndSet(null, new State(expectedRequests))) {
-                throw new IllegalStateException("server barrier is already armed");
-            }
-        }
-
-        boolean awaitAllEntered(long timeout, java.util.concurrent.TimeUnit unit)
-                throws InterruptedException {
-            return requiredState().entered.await(timeout, unit);
-        }
-
-        int observedRequests() {
-            State state = requiredState();
-            return state.expectedRequests - (int) state.entered.getCount();
-        }
-
-        boolean enterAndAwaitRelease(long timeout, java.util.concurrent.TimeUnit unit)
-                throws InterruptedException {
-            State state = active.get();
-            if (state == null) {
-                return true;
-            }
-            state.entered.countDown();
-            return state.release.await(timeout, unit);
-        }
-
-        void release() {
-            State state = active.get();
-            if (state != null) {
-                state.release.countDown();
-            }
-        }
-
-        void disarm() {
-            State state = active.getAndSet(null);
-            if (state != null) {
-                state.release.countDown();
-            }
-        }
-
-        private State requiredState() {
-            State state = active.get();
-            if (state == null) {
-                throw new IllegalStateException("server barrier is not armed");
-            }
-            return state;
-        }
-
-        private static final class State {
-
-            private final int expectedRequests;
-            private final CountDownLatch entered;
-            private final CountDownLatch release = new CountDownLatch(1);
-
-            private State(int expectedRequests) {
-                this.expectedRequests = expectedRequests;
-                this.entered = new CountDownLatch(expectedRequests);
-            }
-        }
-    }
 }
