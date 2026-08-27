@@ -82,6 +82,33 @@ class IdemProbeCommandTest {
     }
 
     @Test
+    void writesJsonToTheRequestedPathAndPreservesTheSemanticExitCode() throws IOException {
+        AtomicInteger reservations = new AtomicInteger();
+        server.createContext("/reservations", exchange -> {
+            int reservation = reservations.incrementAndGet();
+            respond(exchange, 201, "{\"reservationId\":\"r-" + reservation + "\"}");
+        });
+        server.createContext("/reservations/count", exchange ->
+                respond(exchange, 200, "{\"count\":" + reservations.get() + "}"));
+        Path report = tempDir.resolve("requested-report.json");
+
+        CapturedExecution execution = execute(
+                "run",
+                "--json",
+                report,
+                writeScenario(baseUrl(), baseUrl(), "$.reservationId"));
+
+        assertThat(execution.out()).isEmpty();
+        assertThat(execution.err()).isEmpty();
+        assertThat(execution.exitCode()).isEqualTo(1);
+        assertThat(Files.readString(report))
+                .contains("\"exitCode\" : 1")
+                .contains("\"code\" : \"IDENTITY_DIVERGED\"")
+                .doesNotContain("Idempotency-Key")
+                .doesNotContain("PHONE");
+    }
+
+    @Test
     void returnsTwoAndReportsTransportFailure() throws IOException {
         server.createContext("/reservations/count", exchange ->
                 respond(exchange, 200, "{\"count\":1}"));
