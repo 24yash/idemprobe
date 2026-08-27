@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: ${IDEMPROBE_DATABASE_URL:jdbc:postgresql://localhost:5432/idemprobe}
+    username: ${IDEMPROBE_DATABASE_USERNAME:idemprobe}
+    password: ${IDEMPROBE_DATABASE_PASSWORD:idemprobe}
+  sql:
+    init:
+      mode: always
+
+idemprobe:
+  demo:
+    mode: ${IDEMPROBE_DEMO_MODE:}
