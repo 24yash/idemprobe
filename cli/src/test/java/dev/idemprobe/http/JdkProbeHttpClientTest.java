@@ -15,6 +15,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,6 +74,60 @@ class JdkProbeHttpClientTest {
             assertThat(http.statusCode()).isEqualTo(500);
             assertThat(http.responseBody()).contains("temporarily unavailable");
         });
+    }
+
+    @Test
+    void decodesNonAsciiResponseBodyUsingResponseCharset() {
+        server.createContext("/encoded", exchange -> {
+            byte[] body = "{\"message\":\"café\"}".getBytes(StandardCharsets.ISO_8859_1);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=ISO-8859-1");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+
+        InvocationResult result = client.execute(invocation(serverUri("/encoded")));
+
+        assertThat(result).isInstanceOfSatisfying(HttpInvocationResult.class, http ->
+                assertThat(http.responseBody()).isEqualTo("{\"message\":\"café\"}"));
+    }
+
+    @Test
+    void returnsTransportFailureAndRestoresInterruptStatus() throws InterruptedException {
+        CountDownLatch requestReceived = new CountDownLatch(1);
+        CountDownLatch releaseResponse = new CountDownLatch(1);
+        AtomicReference<InvocationResult> result = new AtomicReference<>();
+        AtomicBoolean interruptRestored = new AtomicBoolean();
+        server.createContext("/interrupted", exchange -> {
+            requestReceived.countDown();
+            try {
+                releaseResponse.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            } finally {
+                exchange.close();
+            }
+        });
+
+        Thread executingThread = Thread.ofVirtual().start(() -> {
+            result.set(client.execute(invocation(serverUri("/interrupted"))));
+            interruptRestored.set(Thread.currentThread().isInterrupted());
+        });
+        try {
+            assertThat(requestReceived.await(5, TimeUnit.SECONDS)).isTrue();
+
+            executingThread.interrupt();
+            executingThread.join(5_000);
+
+            assertThat(executingThread.isAlive()).isFalse();
+            assertThat(result.get()).isInstanceOfSatisfying(TransportFailure.class, failure ->
+                    assertThat(failure.message()).isEqualTo("request interrupted"));
+            assertThat(interruptRestored).isTrue();
+        } finally {
+            releaseResponse.countDown();
+            executingThread.interrupt();
+            executingThread.join(5_000);
+        }
     }
 
     @Test
