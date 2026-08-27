@@ -21,9 +21,16 @@ public final class ProbeRunner {
     private static final String PROBE_KEY_TOKEN = "${probe.key}";
 
     private final ProbeHttpClient httpClient;
+    private final WorkerStartCoordinator workerStartCoordinator;
 
     public ProbeRunner(ProbeHttpClient httpClient) {
+        this(httpClient, invocationIndex -> {});
+    }
+
+    ProbeRunner(ProbeHttpClient httpClient, WorkerStartCoordinator workerStartCoordinator) {
         this.httpClient = Objects.requireNonNull(httpClient, "httpClient");
+        this.workerStartCoordinator =
+                Objects.requireNonNull(workerStartCoordinator, "workerStartCoordinator");
     }
 
     public ProbeExecution run(Scenario scenario, String probeKey) {
@@ -61,7 +68,11 @@ public final class ProbeRunner {
                 for (int index = 0; index < count; index++) {
                     int invocationIndex = index;
                     futures.add(completions.submit(() -> {
-                        ready.countDown();
+                        try {
+                            workerStartCoordinator.beforeReady(invocationIndex);
+                        } finally {
+                            ready.countDown();
+                        }
                         start.await();
                         Invocation invocation = new Invocation(
                                 invocationIndex,
@@ -81,10 +92,10 @@ public final class ProbeRunner {
             } catch (ExecutionException failed) {
                 throw new IllegalStateException("Concurrent probe execution failed", failed.getCause());
             } finally {
-                start.countDown();
                 if (!completed) {
                     futures.forEach(future -> future.cancel(true));
                 }
+                start.countDown();
             }
         }
     }
@@ -114,5 +125,10 @@ public final class ProbeRunner {
         return HttpRequest.newBuilder(verification.url())
                 .method(verification.method(), BodyPublishers.noBody())
                 .build();
+    }
+
+    @FunctionalInterface
+    interface WorkerStartCoordinator {
+        void beforeReady(int invocationIndex) throws InterruptedException;
     }
 }

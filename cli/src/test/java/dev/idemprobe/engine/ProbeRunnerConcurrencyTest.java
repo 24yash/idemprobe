@@ -24,34 +24,79 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
+@Timeout(value = 10, unit = SECONDS)
 class ProbeRunnerConcurrencyTest {
 
     @Test
     void overlapsEveryConcurrentInvocationBeforeAnyMayComplete() throws Exception {
         int concurrentDuplicates = 20;
         OverlapProbeHttpClient client = new OverlapProbeHttpClient(concurrentDuplicates);
+        FinalWorkerGate workerGate = new FinalWorkerGate(concurrentDuplicates);
         AtomicReference<ProbeExecution> execution = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         Thread runnerThread = Thread.startVirtualThread(() -> {
             try {
-                execution.set(new ProbeRunner(client).run(scenario(0, concurrentDuplicates), "shared-key"));
+                execution.set(new ProbeRunner(client, workerGate)
+                        .run(scenario(0, concurrentDuplicates), "shared-key"));
             } catch (Throwable thrown) {
                 failure.set(thrown);
             }
         });
 
         try {
+            assertThat(workerGate.finalWorkerWaiting().await(2, SECONDS)).isTrue();
+            assertThat(client.concurrentExecutions()).isZero();
+            workerGate.releaseFinalWorker();
             assertThat(client.allStarted().await(2, SECONDS)).isTrue();
             assertThat(client.maxInFlight()).isEqualTo(concurrentDuplicates);
         } finally {
-            client.releaseResponses();
-            runnerThread.join(2_000);
+            cleanupRunner(
+                    runnerThread, workerGate::releaseFinalWorker, client::releaseResponses);
         }
 
-        assertThat(runnerThread.isAlive()).isFalse();
         assertThat(failure.get()).isNull();
         assertThat(execution.get().invocations()).hasSize(concurrentDuplicates);
+    }
+
+    @Test
+    void interruptionBeforeStartCancelsWorkersWithoutExecutingRequests() throws Exception {
+        int concurrentDuplicates = 20;
+        OverlapProbeHttpClient client = new OverlapProbeHttpClient(concurrentDuplicates);
+        FinalWorkerGate workerGate = new FinalWorkerGate(concurrentDuplicates);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicBoolean interruptPreserved = new AtomicBoolean();
+        CountDownLatch runnerFinished = new CountDownLatch(1);
+        Thread runnerThread = Thread.startVirtualThread(() -> {
+            try {
+                new ProbeRunner(client, workerGate)
+                        .run(scenario(0, concurrentDuplicates), "shared-key");
+            } catch (Throwable thrown) {
+                failure.set(thrown);
+            } finally {
+                interruptPreserved.set(Thread.currentThread().isInterrupted());
+                runnerFinished.countDown();
+            }
+        });
+
+        try {
+            assertThat(workerGate.finalWorkerWaiting().await(2, SECONDS)).isTrue();
+            runnerThread.interrupt();
+            assertThat(runnerFinished.await(2, SECONDS)).isTrue();
+        } finally {
+            cleanupRunner(
+                    runnerThread, workerGate::releaseFinalWorker, client::releaseResponses);
+        }
+
+        assertThat(client.concurrentExecutions()).isZero();
+        assertThat(client.verificationCalled()).isFalse();
+        assertThat(failure.get())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Concurrent probe execution interrupted")
+                .cause()
+                .isInstanceOf(InterruptedException.class);
+        assertThat(interruptPreserved).isTrue();
     }
 
     @Test
@@ -70,12 +115,9 @@ class ProbeRunnerConcurrencyTest {
             }
             runnerThread.join(2_000);
         } finally {
-            client.releaseAll();
-            runnerThread.interrupt();
-            runnerThread.join(2_000);
+            cleanupRunner(runnerThread, client::releaseAll);
         }
 
-        assertThat(runnerThread.isAlive()).isFalse();
         assertThat(client.completionOrder()).containsExactly(4, 3, 2, 1, 0);
         assertThat(execution.get().invocations())
                 .extracting(InvocationResult::phase)
@@ -147,11 +189,9 @@ class ProbeRunnerConcurrencyTest {
             client.triggerFailure();
             runnerThread.join(2_000);
         } finally {
-            client.triggerFailure();
-            runnerThread.interrupt();
+            cleanupRunner(runnerThread, client::triggerFailure, client::releasePeers);
         }
 
-        assertThat(runnerThread.isAlive()).isFalse();
         assertThat(failure.get())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Concurrent probe execution failed")
@@ -183,10 +223,9 @@ class ProbeRunnerConcurrencyTest {
             runnerThread.interrupt();
             runnerThread.join(2_000);
         } finally {
-            runnerThread.interrupt();
+            cleanupRunner(runnerThread, client::releaseTasks);
         }
 
-        assertThat(runnerThread.isAlive()).isFalse();
         assertThat(failure.get())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Concurrent probe execution interrupted")
@@ -218,6 +257,8 @@ class ProbeRunnerConcurrencyTest {
         private final CountDownLatch release = new CountDownLatch(1);
         private final AtomicInteger inFlight = new AtomicInteger();
         private final AtomicInteger maxInFlight = new AtomicInteger();
+        private final AtomicInteger concurrentExecutions = new AtomicInteger();
+        private final AtomicBoolean verificationCalled = new AtomicBoolean();
 
         private OverlapProbeHttpClient(int count) {
             allStarted = new CountDownLatch(count);
@@ -225,10 +266,15 @@ class ProbeRunnerConcurrencyTest {
 
         @Override
         public InvocationResult execute(Invocation invocation) {
+            if (invocation.phase() == InvocationPhase.VERIFICATION) {
+                verificationCalled.set(true);
+                return result(invocation);
+            }
             if (invocation.phase() != InvocationPhase.CONCURRENT) {
                 return result(invocation);
             }
 
+            concurrentExecutions.incrementAndGet();
             int current = inFlight.incrementAndGet();
             maxInFlight.accumulateAndGet(current, Math::max);
             allStarted.countDown();
@@ -254,6 +300,45 @@ class ProbeRunnerConcurrencyTest {
 
         private int maxInFlight() {
             return maxInFlight.get();
+        }
+
+        private int concurrentExecutions() {
+            return concurrentExecutions.get();
+        }
+
+        private boolean verificationCalled() {
+            return verificationCalled.get();
+        }
+    }
+
+    private static final class FinalWorkerGate implements ProbeRunner.WorkerStartCoordinator {
+        private final int finalIndex;
+        private final CountDownLatch otherWorkersArrived;
+        private final CountDownLatch finalWorkerWaiting = new CountDownLatch(1);
+        private final CountDownLatch releaseFinalWorker = new CountDownLatch(1);
+
+        private FinalWorkerGate(int count) {
+            finalIndex = count - 1;
+            otherWorkersArrived = new CountDownLatch(count - 1);
+        }
+
+        @Override
+        public void beforeReady(int invocationIndex) throws InterruptedException {
+            if (invocationIndex == finalIndex) {
+                otherWorkersArrived.await();
+                finalWorkerWaiting.countDown();
+                releaseFinalWorker.await();
+            } else {
+                otherWorkersArrived.countDown();
+            }
+        }
+
+        private CountDownLatch finalWorkerWaiting() {
+            return finalWorkerWaiting;
+        }
+
+        private void releaseFinalWorker() {
+            releaseFinalWorker.countDown();
         }
     }
 
@@ -362,6 +447,10 @@ class ProbeRunnerConcurrencyTest {
             triggerFailure.countDown();
         }
 
+        private void releasePeers() {
+            waitForCancellation.countDown();
+        }
+
         private CountDownLatch interruptedPeers() {
             return interruptedPeers;
         }
@@ -412,6 +501,10 @@ class ProbeRunnerConcurrencyTest {
             return interruptedTasks;
         }
 
+        private void releaseTasks() {
+            waitForCancellation.countDown();
+        }
+
         private boolean verificationCalled() {
             return verificationCalled.get();
         }
@@ -423,5 +516,18 @@ class ProbeRunnerConcurrencyTest {
                 : "{\"reservationId\":\"r-1\"}";
         return new HttpInvocationResult(
                 invocation.index(), invocation.phase(), 201, body, Duration.ofMillis(10));
+    }
+
+    private static void cleanupRunner(Thread runnerThread, Runnable... releases)
+            throws InterruptedException {
+        for (Runnable release : releases) {
+            release.run();
+        }
+        runnerThread.join(2_000);
+        if (runnerThread.isAlive()) {
+            runnerThread.interrupt();
+        }
+        runnerThread.join(2_000);
+        assertThat(runnerThread.isAlive()).isFalse();
     }
 }
