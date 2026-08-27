@@ -47,7 +47,7 @@ class ProbeRunnerConcurrencyTest {
 
         try {
             assertThat(workerGate.finalWorkerWaiting().await(2, SECONDS)).isTrue();
-            assertThat(client.concurrentExecutions()).isZero();
+            assertThat(client.firstConcurrentExecution().await(1, SECONDS)).isFalse();
             workerGate.releaseFinalWorker();
             assertThat(client.allStarted().await(2, SECONDS)).isTrue();
             assertThat(client.maxInFlight()).isEqualTo(concurrentDuplicates);
@@ -254,6 +254,7 @@ class ProbeRunnerConcurrencyTest {
 
     private static final class OverlapProbeHttpClient implements ProbeHttpClient {
         private final CountDownLatch allStarted;
+        private final CountDownLatch firstConcurrentExecution = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
         private final AtomicInteger inFlight = new AtomicInteger();
         private final AtomicInteger maxInFlight = new AtomicInteger();
@@ -274,6 +275,7 @@ class ProbeRunnerConcurrencyTest {
                 return result(invocation);
             }
 
+            firstConcurrentExecution.countDown();
             concurrentExecutions.incrementAndGet();
             int current = inFlight.incrementAndGet();
             maxInFlight.accumulateAndGet(current, Math::max);
@@ -292,6 +294,10 @@ class ProbeRunnerConcurrencyTest {
 
         private CountDownLatch allStarted() {
             return allStarted;
+        }
+
+        private CountDownLatch firstConcurrentExecution() {
+            return firstConcurrentExecution;
         }
 
         private void releaseResponses() {
