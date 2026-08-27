@@ -34,7 +34,7 @@ public final class ResultEvaluator {
         if (!hasExpectedShape(scenario, execution)) {
             findings.add(new Finding(
                     FindingCode.EXECUTION_INVALID,
-                    "Execution evidence does not match the sequential plan"));
+                    "Execution evidence does not match the duplicate plan"));
             return new RunResult(execution, findings);
         }
 
@@ -51,7 +51,7 @@ public final class ResultEvaluator {
             if (!scenario.assertions().allowedStatuses().contains(http.statusCode())) {
                 findings.add(new Finding(
                         FindingCode.STATUS_NOT_ALLOWED,
-                        "Sequential invocation " + http.index() + " returned HTTP " + http.statusCode()));
+                        invocationLabel(http) + " returned HTTP " + http.statusCode()));
             }
             if (identityPath != null) {
                 readIdentity(http, identityPath, findings, identities);
@@ -61,7 +61,7 @@ public final class ResultEvaluator {
         if (identities.size() > 1) {
             findings.add(new Finding(
                     FindingCode.IDENTITY_DIVERGED,
-                    "Sequential responses returned different identities: " + identities));
+                    "Duplicate responses returned different identities: " + identities));
         }
 
         evaluateVerification(scenario, execution.verificationResult(), findings);
@@ -69,17 +69,35 @@ public final class ResultEvaluator {
     }
 
     private boolean hasExpectedShape(Scenario scenario, ProbeExecution execution) {
-        if (execution.invocations().size() != scenario.execution().sequentialDuplicates()) {
+        int sequentialCount = scenario.execution().sequentialDuplicates();
+        int concurrentCount = scenario.execution().concurrentDuplicates();
+        if (execution.invocations().size() != sequentialCount + concurrentCount) {
             return false;
         }
-        for (int index = 0; index < execution.invocations().size(); index++) {
-            InvocationResult invocation = execution.invocations().get(index);
-            if (invocation.phase() != InvocationPhase.SEQUENTIAL || invocation.index() != index) {
-                return false;
-            }
+        if (!hasIndexedPhase(
+                execution.invocations(), 0, sequentialCount, InvocationPhase.SEQUENTIAL)) {
+            return false;
+        }
+        if (!hasIndexedPhase(
+                execution.invocations(), sequentialCount, concurrentCount, InvocationPhase.CONCURRENT)) {
+            return false;
         }
         InvocationResult verification = execution.verificationResult();
         return verification.phase() == InvocationPhase.VERIFICATION && verification.index() == 0;
+    }
+
+    private boolean hasIndexedPhase(
+            List<InvocationResult> invocations,
+            int offset,
+            int count,
+            InvocationPhase phase) {
+        for (int index = 0; index < count; index++) {
+            InvocationResult invocation = invocations.get(offset + index);
+            if (invocation.phase() != phase || invocation.index() != index) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private JsonPath compilePath(String expression, String purpose, List<Finding> findings) {
@@ -99,29 +117,34 @@ public final class ResultEvaluator {
             List<Finding> findings,
             Set<Object> identities) {
         if (isJsonNull(http.responseBody())) {
-            findings.add(identityMissing(http.index()));
+            findings.add(identityMissing(http));
             return;
         }
         try {
             Object identity = parse(http.responseBody()).read(path);
             if (identity == null) {
-                findings.add(identityMissing(http.index()));
+                findings.add(identityMissing(http));
             } else {
                 identities.add(normalizeIdentity(identity));
             }
         } catch (PathNotFoundException missing) {
-            findings.add(identityMissing(http.index()));
+            findings.add(identityMissing(http));
         } catch (JsonPathException | IllegalArgumentException unreadable) {
             findings.add(new Finding(
                     FindingCode.PARSING_ERROR,
-                    "Sequential invocation " + http.index() + " returned unreadable JSON"));
+                    invocationLabel(http) + " returned unreadable JSON"));
         }
     }
 
-    private Finding identityMissing(int index) {
+    private Finding identityMissing(HttpInvocationResult invocation) {
         return new Finding(
                 FindingCode.IDENTITY_MISSING,
-                "Sequential invocation " + index + " did not contain the configured identity");
+                invocationLabel(invocation) + " did not contain the configured identity");
+    }
+
+    private String invocationLabel(InvocationResult invocation) {
+        String phase = invocation.phase() == InvocationPhase.SEQUENTIAL ? "Sequential" : "Concurrent";
+        return phase + " invocation " + invocation.index();
     }
 
     private void evaluateVerification(

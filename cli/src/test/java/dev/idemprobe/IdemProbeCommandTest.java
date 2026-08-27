@@ -54,7 +54,10 @@ class IdemProbeCommandTest {
         CapturedExecution execution = execute("run", writeScenario(baseUrl(), baseUrl(), "$.reservationId"));
 
         assertThat(execution.exitCode()).isZero();
-        assertThat(execution.out()).contains("PASS").contains("2 sequential invocations");
+        assertThat(execution.out())
+                .contains("PASS")
+                .contains("2 sequential invocations")
+                .contains("20 concurrent invocations");
         assertThat(execution.err()).isEmpty();
     }
 

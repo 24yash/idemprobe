@@ -38,6 +38,23 @@ class ResultEvaluatorTest {
     }
 
     @Test
+    void passesForOrderedSequentialAndConcurrentEvidence() {
+        Scenario mixedScenario = scenario("$.reservationId", "$.count", BigDecimal.ONE, 2, 2);
+        RunResult result = evaluator.evaluate(
+                mixedScenario,
+                new ProbeExecution(
+                        List.of(
+                                http(0, 201, "{\"reservationId\":\"r-1\"}"),
+                                http(1, 200, "{\"reservationId\":\"r-1\"}"),
+                                httpConcurrent(0, 201, "{\"reservationId\":\"r-1\"}"),
+                                httpConcurrent(1, 200, "{\"reservationId\":\"r-1\"}")),
+                        httpVerification(200, "{\"count\":1}")));
+
+        assertThat(result.findings()).isEmpty();
+        assertThat(result.exitCode()).isZero();
+    }
+
+    @Test
     void findsIdentityDivergenceAndMultipleSideEffects() {
         RunResult result = evaluator.evaluate(
                 scenario,
@@ -270,6 +287,15 @@ class ResultEvaluatorTest {
             String identityPath,
             String verificationPath,
             BigDecimal expectedVerificationValue) {
+        return scenario(identityPath, verificationPath, expectedVerificationValue, 2, 0);
+    }
+
+    private static Scenario scenario(
+            String identityPath,
+            String verificationPath,
+            BigDecimal expectedVerificationValue,
+            int sequentialDuplicates,
+            int concurrentDuplicates) {
         return new Scenario(
                 new TargetSpec(
                         "POST",
@@ -278,7 +304,7 @@ class ResultEvaluatorTest {
                                 "Idempotency-Key", "${probe.key}",
                                 "Content-Type", "application/json"),
                         "{\"sku\":\"PHONE\",\"quantity\":1}"),
-                new ExecutionSpec(2, 20),
+                new ExecutionSpec(sequentialDuplicates, concurrentDuplicates),
                 new AssertionSpec(Set.of(200, 201), identityPath),
                 new VerificationSpec(
                         "GET",
@@ -295,5 +321,10 @@ class ResultEvaluatorTest {
     private static HttpInvocationResult httpVerification(int status, String body) {
         return new HttpInvocationResult(
                 0, InvocationPhase.VERIFICATION, status, body, Duration.ofMillis(10));
+    }
+
+    private static HttpInvocationResult httpConcurrent(int index, int status, String body) {
+        return new HttpInvocationResult(
+                index, InvocationPhase.CONCURRENT, status, body, Duration.ofMillis(10));
     }
 }
