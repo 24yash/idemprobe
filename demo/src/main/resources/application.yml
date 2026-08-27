@@ -9,4 +9,4 @@ spring:
 
 idemprobe:
   demo:
-    mode: ${IDEMPROBE_DEMO_MODE:}
+    mode: ${IDEMPROBE_DEMO_MODE:vulnerable}

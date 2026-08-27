@@ -1,0 +1,21 @@
+target:
+  method: POST
+  url: http://localhost:8080/reservations
+  headers:
+    Idempotency-Key: "${probe.key}"
+    Content-Type: application/json
+  body: '{"sku":"PHONE","quantity":1}'
+
+execution:
+  sequentialDuplicates: 2
+  concurrentDuplicates: 20
+
+assertions:
+  allowedStatuses: [200, 201]
+  sameValueAt: "$.reservationId"
+
+verification:
+  method: GET
+  url: http://localhost:8080/reservations/count
+  valueAt: "$.count"
+  expectedValue: 1
