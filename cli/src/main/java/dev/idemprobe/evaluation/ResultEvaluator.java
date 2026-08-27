@@ -1,10 +1,16 @@
 package dev.idemprobe.evaluation;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.DocumentContext;
-import com.jayway.jsonpath.InvalidJsonException;
 import com.jayway.jsonpath.InvalidPathException;
 import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.JsonPathException;
 import com.jayway.jsonpath.PathNotFoundException;
+import com.jayway.jsonpath.spi.json.JacksonJsonProvider;
+import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import dev.idemprobe.config.Scenario;
 import dev.idemprobe.engine.HttpInvocationResult;
 import dev.idemprobe.engine.InvocationPhase;
@@ -13,11 +19,15 @@ import dev.idemprobe.engine.ProbeExecution;
 import dev.idemprobe.engine.TransportFailure;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public final class ResultEvaluator {
+    private static final Configuration JSON_CONFIGURATION = jsonConfiguration();
 
     public RunResult evaluate(Scenario scenario, ProbeExecution execution) {
         List<Finding> findings = new ArrayList<>();
@@ -88,19 +98,23 @@ public final class ResultEvaluator {
             JsonPath path,
             List<Finding> findings,
             Set<Object> identities) {
+        if (isJsonNull(http.responseBody())) {
+            findings.add(identityMissing(http.index()));
+            return;
+        }
         try {
             Object identity = parse(http.responseBody()).read(path);
             if (identity == null) {
                 findings.add(identityMissing(http.index()));
             } else {
-                identities.add(identity);
+                identities.add(normalizeIdentity(identity));
             }
         } catch (PathNotFoundException missing) {
             findings.add(identityMissing(http.index()));
-        } catch (InvalidJsonException malformed) {
+        } catch (JsonPathException | IllegalArgumentException unreadable) {
             findings.add(new Finding(
                     FindingCode.PARSING_ERROR,
-                    "Sequential invocation " + http.index() + " returned malformed JSON"));
+                    "Sequential invocation " + http.index() + " returned unreadable JSON"));
         }
     }
 
@@ -131,14 +145,16 @@ public final class ResultEvaluator {
         if (path == null) {
             return;
         }
+        if (isJsonNull(http.responseBody())) {
+            findings.add(verificationParsingFinding());
+            return;
+        }
 
         Object extracted;
         try {
             extracted = parse(http.responseBody()).read(path);
-        } catch (InvalidJsonException | PathNotFoundException malformed) {
-            findings.add(new Finding(
-                    FindingCode.PARSING_ERROR,
-                    "Verification response did not contain readable JSON at the configured path"));
+        } catch (JsonPathException | IllegalArgumentException unreadable) {
+            findings.add(verificationParsingFinding());
             return;
         }
 
@@ -149,7 +165,13 @@ public final class ResultEvaluator {
             return;
         }
 
-        BigDecimal actual = new BigDecimal(number.toString());
+        BigDecimal actual;
+        try {
+            actual = normalizeNumber(number);
+        } catch (NumberFormatException unreadable) {
+            findings.add(verificationParsingFinding());
+            return;
+        }
         if (actual.compareTo(scenario.verification().expectedValue()) != 0) {
             findings.add(new Finding(
                     FindingCode.SIDE_EFFECT_COUNT_MISMATCH,
@@ -159,7 +181,49 @@ public final class ResultEvaluator {
     }
 
     private DocumentContext parse(String body) {
-        return JsonPath.parse(body);
+        return JsonPath.using(JSON_CONFIGURATION).parse(body);
+    }
+
+    private Object normalizeIdentity(Object value) {
+        if (value instanceof Number number) {
+            return normalizeNumber(number);
+        }
+        if (value instanceof List<?> list) {
+            List<Object> normalized = new ArrayList<>(list.size());
+            list.forEach(element -> normalized.add(normalizeIdentity(element)));
+            return Collections.unmodifiableList(normalized);
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<Object, Object> normalized = new LinkedHashMap<>();
+            map.forEach((key, element) -> normalized.put(key, normalizeIdentity(element)));
+            return Collections.unmodifiableMap(normalized);
+        }
+        return value;
+    }
+
+    private BigDecimal normalizeNumber(Number number) {
+        return new BigDecimal(number.toString()).stripTrailingZeros();
+    }
+
+    private boolean isJsonNull(String body) {
+        return body != null && body.strip().equals("null");
+    }
+
+    private Finding verificationParsingFinding() {
+        return new Finding(
+                FindingCode.PARSING_ERROR,
+                "Verification response did not contain readable JSON at the configured path");
+    }
+
+    private static Configuration jsonConfiguration() {
+        ObjectMapper mapper = JsonMapper.builder()
+                .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+                .enable(DeserializationFeature.USE_BIG_INTEGER_FOR_INTS)
+                .build();
+        return Configuration.builder()
+                .jsonProvider(new JacksonJsonProvider(mapper))
+                .mappingProvider(new JacksonMappingProvider(mapper))
+                .build();
     }
 
     private Finding transportFinding(TransportFailure failure) {

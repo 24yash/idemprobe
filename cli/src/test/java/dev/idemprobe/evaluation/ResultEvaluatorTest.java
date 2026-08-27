@@ -160,7 +160,116 @@ class ResultEvaluatorTest {
         assertThat(result.exitCode()).isEqualTo(2);
     }
 
+    @Test
+    void treatsScaleEquivalentNumericIdentitiesAsEqual() {
+        RunResult result = evaluator.evaluate(
+                scenario,
+                new ProbeExecution(
+                        List.of(http(0, 201, "{\"reservationId\":1}"),
+                                http(1, 201, "{\"reservationId\":1.0}")),
+                        httpVerification(200, "{\"count\":1}")));
+
+        assertThat(result.findings()).isEmpty();
+        assertThat(result.exitCode()).isZero();
+    }
+
+    @Test
+    void treatsScaleEquivalentNestedNumericIdentitiesAsEqual() {
+        RunResult result = evaluator.evaluate(
+                scenario,
+                new ProbeExecution(
+                        List.of(
+                                http(0, 201, "{\"reservationId\":{\"parts\":[1,2.0]}}"),
+                                http(1, 201, "{\"reservationId\":{\"parts\":[1.0,2]}}")),
+                        httpVerification(200, "{\"count\":1}")));
+
+        assertThat(result.findings()).isEmpty();
+        assertThat(result.exitCode()).isZero();
+    }
+
+    @Test
+    void recordsEmptyBodyWithoutDiscardingOtherFindings() {
+        RunResult result = evaluator.evaluate(
+                scenario,
+                new ProbeExecution(
+                        List.of(http(0, 201, ""),
+                                http(1, 409, "{\"reservationId\":\"r-1\"}")),
+                        httpVerification(200, "{\"count\":2}")));
+
+        assertThat(result.findings()).extracting(Finding::code)
+                .containsExactlyInAnyOrder(
+                        FindingCode.PARSING_ERROR,
+                        FindingCode.STATUS_NOT_ALLOWED,
+                        FindingCode.SIDE_EFFECT_COUNT_MISMATCH);
+        assertThat(result.exitCode()).isEqualTo(2);
+    }
+
+    @Test
+    void recordsJsonNullIdentityAsMissing() {
+        RunResult result = evaluator.evaluate(
+                scenario,
+                new ProbeExecution(
+                        List.of(http(0, 201, "null"),
+                                http(1, 201, "{\"reservationId\":\"r-1\"}")),
+                        httpVerification(200, "{\"count\":1}")));
+
+        assertThat(result.findings()).extracting(Finding::code)
+                .containsExactly(FindingCode.IDENTITY_MISSING);
+        assertThat(result.exitCode()).isEqualTo(1);
+    }
+
+    @Test
+    void recordsJsonNullVerificationAsParsingError() {
+        RunResult result = evaluator.evaluate(
+                scenario,
+                new ProbeExecution(
+                        List.of(http(0, 201, "{\"reservationId\":\"r-1\"}"),
+                                http(1, 201, "{\"reservationId\":\"r-1\"}")),
+                        httpVerification(200, "null")));
+
+        assertThat(result.findings()).extracting(Finding::code)
+                .containsExactly(FindingCode.PARSING_ERROR);
+        assertThat(result.exitCode()).isEqualTo(2);
+    }
+
+    @Test
+    void comparesHugeVerificationNumberWithoutOverflow() {
+        RunResult result = evaluator.evaluate(
+                scenario,
+                new ProbeExecution(
+                        List.of(http(0, 201, "{\"reservationId\":\"r-1\"}"),
+                                http(1, 201, "{\"reservationId\":\"r-1\"}")),
+                        httpVerification(200, "{\"count\":1e400}")));
+
+        assertThat(result.findings()).extracting(Finding::code)
+                .containsExactly(FindingCode.SIDE_EFFECT_COUNT_MISMATCH);
+        assertThat(result.exitCode()).isEqualTo(1);
+    }
+
+    @Test
+    void preservesHighPrecisionVerificationNumber() {
+        BigDecimal expected = new BigDecimal("0.123456789012345678901234567890123456789");
+        RunResult result = evaluator.evaluate(
+                scenario("$.reservationId", "$.count", expected),
+                new ProbeExecution(
+                        List.of(http(0, 201, "{\"reservationId\":\"r-1\"}"),
+                                http(1, 201, "{\"reservationId\":\"r-1\"}")),
+                        httpVerification(
+                                200,
+                                "{\"count\":0.123456789012345678901234567890123456789}")));
+
+        assertThat(result.findings()).isEmpty();
+        assertThat(result.exitCode()).isZero();
+    }
+
     private static Scenario scenario(String identityPath, String verificationPath) {
+        return scenario(identityPath, verificationPath, BigDecimal.ONE);
+    }
+
+    private static Scenario scenario(
+            String identityPath,
+            String verificationPath,
+            BigDecimal expectedVerificationValue) {
         return new Scenario(
                 new TargetSpec(
                         "POST",
@@ -175,7 +284,7 @@ class ResultEvaluatorTest {
                         "GET",
                         URI.create("http://localhost:8080/reservations/count"),
                         verificationPath,
-                        BigDecimal.ONE));
+                        expectedVerificationValue));
     }
 
     private static HttpInvocationResult http(int index, int status, String body) {
